@@ -1,0 +1,9 @@
+{
+  "name": "backend-service",
+  "version": "1.0.0",
+  "description": "Backend service for EKS testing",
+  "main": "app.js",
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
