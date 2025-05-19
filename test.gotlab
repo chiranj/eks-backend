@@ -1,0 +1,218 @@
+
+default:
+  tags:
+    - aws_lab
+    
+stages:
+  - build
+#  - push
+
+variables:
+  DEV_DEV_NEXUS_URL: "${DEV_NEXUS_URL}"  # e.g., nexus.example.com:8082
+  NEXUS_REPOSITORY: "	docker-release-candidates/psb/products/"  # e.g., docker-hosted
+  NEXUS_AUTH_TOKEN: "${NEXUS_AUTH_TOKEN}"  # base64 encoded username:password
+  BACKEND_IMAGE_NAME: "${DEV_NEXUS_URL}/${NEXUS_REPOSITORY}/backend-service"
+  #FRONTEND_IMAGE_NAME: "${DEV_NEXUS_URL}/${NEXUS_REPOSITORY}/frontend-service"
+  VERSION: "${CI_COMMIT_SHORT_SHA}"
+  # Docker settings
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_TLS_CERTDIR: ""
+  DOCKER_DRIVER: overlay2
+
+
+default:
+  image: docker:20.10
+  services:
+    - docker:20.10-dind
+  before_script:
+    # Set up Docker authentication with base64 token
+    - apk add --no-cache aws-cli jq curl bash
+    - mkdir -p ~/.docker
+    - |
+      cat > ~/.docker/config.json << EOF
+      {
+        "auths": {
+          "${DEV_NEXUS_URL}": {
+            "auth": "${NEXUS_AUTH_TOKEN}"
+          }
+        }
+      }
+      EOF
+    # Verify Docker is working
+    - docker info
+    # Verify Nexus authentication (optional)
+    - echo "Verifying Nexus authentication..."
+    #- curl -s -H "Authorization: Basic ${NEXUS_AUTH_TOKEN}" -X GET "${DEV_NEXUS_URL}/v2/_catalog" || echo "Authentication check failed, but continuing"
+
+# Build and push backend image 
+build:backend:
+  stage: build
+  script:
+    - export NEXUS_CREDENTIALS=$(aws secretsmanager get-secret-value --secret-id "lab/nexus/devcicm" --region "us-east-1" --query "SecretString" --output text || echo "{}")
+    - export NEXUS_TOKEN=$(echo "$NEXUS_CREDENTIALS" | jq -r '.NEXUS_TOKEN // empty')
+
+    - mkdir -p ~/.docker
+    - |
+      cat > ~/.docker/config.json << EOF
+      {
+        "auths": {
+          "${DEV_NEXUS_URL}": {
+            "auth": "${NEXUS_TOKEN}"
+          }
+        }
+      }
+      EOF
+    # Verify Docker is working
+    - docker info
+    # Verify Nexus authentication (optional)
+    - echo "Verifying Nexus authentication..."
+    - 'curl -s -H "Authorization: Basic ${NEXUS_TOKEN}" -X GET "${DEV_NEXUS_URL}/v2/_catalog" || echo "Authentication check failed, but continuing"'
+
+    
+    - echo "Building backend image..."
+    - cd eks-backend
+    # Build with multiple tags
+    - docker build -t ${BACKEND_IMAGE_NAME}:${VERSION} .
+    - docker tag ${BACKEND_IMAGE_NAME}:${VERSION} ${BACKEND_IMAGE_NAME}:latest
+    # Push to Nexus
+    - echo "Pushing backend image to Nexus..."
+    - docker push ${BACKEND_IMAGE_NAME}:${VERSION}
+    - docker push ${BACKEND_IMAGE_NAME}:latest
+    - echo "Backend image pushed successfully"
+  artifacts:
+    paths:
+      - backend/
+    expire_in: 1 week
+
+
+# Generate deployment manifest
+create:manifest:
+  stage: push
+  image: alpine:latest
+  script:
+    - echo "Generating deployment manifest..."
+    - |
+      cat > deployment-info.json << EOF
+      {
+        "version": "${VERSION}",
+        "images": {
+          "backend": "${BACKEND_IMAGE_NAME}:${VERSION}"
+        },
+        "build_timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+        "pipeline_id": "${CI_PIPELINE_ID}",
+        "commit": {
+          "sha": "${CI_COMMIT_SHA}",
+          "ref": "${CI_COMMIT_REF_NAME}",
+          "message": "${CI_COMMIT_MESSAGE}"
+        }
+      }
+      EOF
+    - cat deployment-info.json
+  artifacts:
+    paths:
+      - deployment-info.json
+    expire_in: 1 month
+  dependencies: []
+
+
+
+
+
+default:
+  tags:
+    - aws_lab
+stages:
+#  - validate
+  - deploy
+
+variables:
+  AWS_REGION: us-east-1
+  EKS_CLUSTER_NAME: eks-paas-dev-cluster
+  AWS_SUBNET_IDS: subnet-0383101af50ccc089,subnet-08c5702ac133f7990
+  HELM_RELEASE_NAME: traefik
+  HELM_NAMESPACE: traefik
+  HELM_TIMEOUT: 5m
+
+.aws_auth: &aws_auth
+  before_script:
+    - apk update
+    - apk add --no-cache curl bash openssl jq yq python3 git aws-cli
+    - curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3
+    - chmod 700 get_helm.sh
+    - ./get_helm.sh
+    - helm version
+    - echo "Installing kubectl..."
+    - curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+    - chmod +x kubectl
+    - mv kubectl /usr/local/bin/
+    - kubectl version --client
+
+    # Install jq (needed for JSON processing)
+    #- apt-get update && apt-get install -y jqo[]
+
+    - echo "Authenticating with AWS..."
+    - aws --version
+    - aws configure set region $AWS_REGION
+    - aws eks update-kubeconfig --name $EKS_CLUSTER_NAME --region $AWS_REGION
+
+    #- echo "Updating kubeconfig with token authentication..."
+    #- aws eks get-token --cluster-name $EKS_CLUSTER_NAME --region $AWS_REGION > /tmp/aws-token.json
+    #- export TOKEN=$(cat /tmp/aws-token.json | jq -r '.status.token')
+    #- kubectl config set-credentials aws --token=$TOKEN
+    #- kubectl config set-context --current --user=aws
+    - kubectl get svc -A
+
+
+#validate:
+#  stage: validate
+#  image: registry.gitlab.com/gitlab-org/cloud-deploy/aws-base:latest
+#  <<: *aws_auth
+#  script:
+#    - echo "Installing Helm..."
+#    - curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash
+#    - echo "Validating Chart.yaml and values.yaml..."
+#    - helm lint .
+#    - echo "Validating Kubernetes resources that would be created..."
+#    #- helm dependency update .
+#    #- helm template traefik . --values values.yaml
+
+
+
+deploy_traefik:
+  stage: deploy
+  image: alpine:latest
+  <<: *aws_auth
+  script:
+    #- echo "Installing Helm..."
+    #- curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash
+    #- echo "Updating Helm dependencies..."
+    #- aws eks update-kubeconfig --name $EKS_CLUSTER_NAME --region $AWS_REGION
+    #- echo -n "${AWS_SUBNET_IDS}" > subnets.txt
+    - echo "yq -n '.service.annotations.\"service.beta.kubernetes.io/aws-load-balancer-subnets\" = env(AWS_SUBNET_IDS)' > values-override.yaml"
+    - |
+      yq -n '.service.annotations."service.beta.kubernetes.io/aws-load-balancer-subnets" = env(AWS_SUBNET_IDS)' > values-override.yaml
+    - cat values-override.yaml
+    - export KUBECONFIG=/root/.kube/config
+    - helm repo add traefik https://dev-cicm.etc.uspto.gov/nexus3/repository/traefik-helm/
+    #- helm repo add traefik https://traefik.github.io/charts
+    - helm repo update
+    - mkdir charts
+    - helm pull traefik/traefik --destination charts/
+    #- helm repo list
+    #- helm dependency update .
+    - ls -lR
+    #- helm template traefik/traefik -f values.yaml | grep -A40 "Service"
+    #- echo "Deploying Traefik to EKS..."
+    #- echo "--set 'traefik.service.annotations.service\.beta\.kubernetes\.io/aws-load-balancer-subnets=\"${AWS_SUBNET_IDS}\"' "
+    - |
+      helm template traefik charts/traefik-35.3.0.tgz  \
+        --namespace traefik \
+        --values values.yaml \
+        --values values-override.yaml > traefik-manifest.yaml
+    - cat traefik-manifest.yaml
+   #       --set-file "traefik.service.annotations.service\.beta\.kubernetes\.io/aws-load-balancer-subnets=subnets.txt" \
+   # - echo "Verifying deployment..."
+    - kubectl apply -f traefik-manifest.yaml
+    - kubectl get pods -n $HELM_NAMESPACE
+   # - kubectl get svc -n $HELM_NAMESPACE
+   # - echo "Traefik deployment completed."
