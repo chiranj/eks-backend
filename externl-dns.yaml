@@ -1,0 +1,71 @@
+## Provider configuration
+provider: aws
+aws:
+  zoneType: public
+  preferCNAME: true
+
+## Service account configuration with IAM role for IRSA
+serviceAccount:
+  create: true
+  name: "external-dns"
+  # The annotation will be added by the yq command
+
+## TraefikV3 source configuration
+sources:
+  - service
+  - ingress
+  - traefik-ingressroute
+
+## DNS Record configuration
+txtOwnerId: "eks-cluster"
+txtPrefix: "external-dns-"
+domainFilters: [] # Optionally restrict to specific domains
+policy: sync
+registry: txt
+
+## Deployment-specific settings
+interval: "1m"
+logLevel: info
+
+## Resource requests and limits
+resources:
+  limits:
+    cpu: 50m
+    memory: 100Mi
+  requests:
+    cpu: 10m
+    memory: 50Mi
+
+## Security contexts
+podSecurityContext:
+  fsGroup: 65534
+securityContext:
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65534
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+## RBAC configuration with Traefik v3 permissions
+rbac:
+  create: true
+  additionalPermissions:
+    - apiGroups: ["traefik.io"]
+      resources: ["ingressroutes"]
+      verbs: ["get", "watch", "list"]
+
+
+# Set your environment variables
+export EKS_ROLE_ARN="arn:aws:iam::123456789012:role/eks-external-dns-role"
+export NLB_HOSTNAME="a1b2c3d4e5f6.elb.us-east-1.amazonaws.com"
+
+# Generate the dynamic values file
+yq -n '.serviceAccount.annotations."eks.amazonaws.com/role-arn" = env(EKS_ROLE_ARN) | .defaultTargets = [env(NLB_HOSTNAME)]' > external-dns-values.yaml
+
+# Install external-dns with both files
+helm install external-dns external-dns/external-dns \
+  -f values.yaml \
+  -f external-dns-values.yaml \
+  -n external-dns  
