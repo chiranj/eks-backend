@@ -20,3 +20,6 @@ Fatal error: requested algo not in md context
 
 Aborted
  
+
+export GCRY_SECMEM_FLAG=0
+export LIBGCRYPT_FORCE_FIPS_MODE=0
