@@ -1,3 +1,5 @@
+```bash
+
 script:
   - "sudo apt update"
   - "sudo apt install ca-certificates"
@@ -15,3 +17,4 @@ script:
   - "dotnet nuget update source nuget.org --source https://api.nuget.org/v3/index.json --configfile ~/.nuget/NuGet/NuGet.Config"
   - "export DOTNET_SYSTEM_NET_HTTP_USESOCKETSHTTPHANDLER=0"
   - "dotnet tool install --global dotnet-sonarscanner"
+```
