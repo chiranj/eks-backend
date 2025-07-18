@@ -23,3 +23,15 @@ Aborted
 
 export GCRY_SECMEM_FLAG=0
 export LIBGCRYPT_FORCE_FIPS_MODE=0
+
+https://notesalexp.org/tesseract-ocr/packages5/en/debian/bookworm/amd64/tesseract-ocr/download.html
+
+
+RUN apt-get install apt-transport-https -y
+RUN echo "deb https://notesalexp.org/tesseract-ocr5/bookworm/ bookworm main" >> /etc/apt/sources.list
+RUN apt-get update -oAcquire::AllowInsecureRepositories=true -y
+RUN apt-get install notesalexp-keyring -oAcquire::AllowInsecureRepositories=true --allow-unauthenticated -y
+RUN apt-get update && apt-get install \
+    tesseract-ocr-eng tesseract-ocr-deu tesseract-ocr-rus \
+    tesseract-ocr-chi-sim tesseract-ocr-jpn tesseract-ocr-kor \
+    -y --allow-unauthenticated
